@@ -80,24 +80,55 @@ node log-task.mjs --title "修复事件块越界" --at 2026-10-02T16:50 --minute
 - `sidebar.panellist` — 侧边栏图标入口，`id: calendar`、`order: 11`（`插件` 是 0，`自动化任务` 是 10，所以它紧随其后）、`label: 日程`
 - `main` — 页面本体，`key: calendar`（与侧边栏 id 相同，点击即打开）
 
-## 安装 / 更新 / 卸载
+## 安装
+
+前置：DeepSeek Harness 桌面版（`desktop` profile 里带有内置的 `webServer`、`schedule` 与
+`client-ui-*` bundle，本插件直接复用，无需另装依赖）。
+
+### 从 GitHub 安装
 
 ```powershell
-$dsh = 'C:\Users\Xiaolan\AppData\Local\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd'
+git clone https://github.com/xiaolan776/dsh-calendar-plugin.git
+$dir = (Resolve-Path .\dsh-calendar-plugin).Path
 
-# 安装（装进 desktop profile）
-& $dsh plugin --profile desktop add "file:E:/chronos-master/dsh-calendar-plugin"
+# 桌面版默认安装位置；装在别处就换成实际路径
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 
-# 改了源码后必须重装：profile 里存的是拷贝，不是链接
+& $dsh plugin --profile desktop add "file:$dir"
+```
+
+- `--profile` 填你的 profile 名；当前会话里可用 `$env:DSH_PROFILE` 查看（桌面应用默认 `desktop`）。
+- **装完必须重启 DeepSeek Harness 应用**才能生效：宿主半的两个 HTTP 路由只在进程启动时注册，
+  只刷新页面只会重新加载浏览器半。
+- 重启后侧边栏「自动化任务」下面会出现「日程」。
+
+### 更新 / 卸载
+
+```powershell
+# 更新：先拉代码，再重装（profile 里存的是拷贝，不是链接，直接 pull 不会生效）
+git -C <clone 目录> pull
 & $dsh plugin --profile desktop remove "@local/dsh-calendar-plugin"
-& $dsh plugin --profile desktop add "file:E:/chronos-master/dsh-calendar-plugin"
+& $dsh plugin --profile desktop add "file:<clone 目录>"
 
 # 卸载
 & $dsh plugin --profile desktop remove "@local/dsh-calendar-plugin"
 ```
 
-装完需要让 Host 重新加载插件树。**宿主半（两个 HTTP 路由）只有重启 DeepSeek Harness 应用才会生效**；
-只刷新页面只会重新加载浏览器半。
+### 本地开发
+
+仓库没有构建步骤，改完 `client.js` / `index.js` 直接重装即可：
+
+```powershell
+# 首次安装（把路径换成你的工作目录）
+& $dsh plugin --profile desktop add "file:E:/chronos-master/dsh-calendar-plugin"
+
+# 改了源码
+& $dsh plugin --profile desktop remove "@local/dsh-calendar-plugin"
+& $dsh plugin --profile desktop add "file:E:/chronos-master/dsh-calendar-plugin"
+```
+
+只想调界面时，可以不重装：用浏览器直接打开插件源码所在的开发页（需要自己起一个静态服务），
+或者干脆改完重装 + 刷新页面——重装只要 1 秒。
 
 ## 数据
 
@@ -117,3 +148,7 @@ $dsh = 'C:\Users\Xiaolan\AppData\Local\Programs\DeepSeek Harness\resources\runti
 - 时间按本地墙上时间处理，不含时区换算。
 - AI 记录只有「追加」没有「回写」：用户在页面上删除/修改宿主记录仅作用于本机显示，不回改 JSON 文件。
 - 「开始执行」依赖内置 `schedule` 服务（随「自动化任务」一起加载）。若该 bundle 被禁用，会自动走剪贴板兜底。
+
+## 许可
+
+[MIT](LICENSE) © 2026 xiaolan776

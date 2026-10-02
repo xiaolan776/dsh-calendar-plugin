@@ -31,7 +31,12 @@
     "log-task.mjs",
     "cordis.patch.yml",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiaolan776/dsh-calendar-plugin.git"
+  },
   "license": "MIT"
 }
