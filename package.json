@@ -28,6 +28,7 @@
   "files": [
     "index.js",
     "client.js",
+    "auto-log.mjs",
     "log-task.mjs",
     "cordis.patch.yml",
     "icon.svg",

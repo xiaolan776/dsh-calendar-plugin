@@ -23,6 +23,9 @@
  *   --id <id>           replace an existing record with this id
  *   --list              print the log and exit
  *   --remove <id>       delete one record and exit
+ *   --backfill          rewind the automatic tailer so it re-reads every Session
+ *                       from the beginning and records all finished todo items;
+ *                       prints what it did and exits
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,6 +34,8 @@ import path from 'node:path';
 const home = (process.env.DSH_HOME || '').trim() || path.join(os.homedir(), '.dsh');
 const dir = path.join(home, 'calendar-plugin');
 const file = path.join(dir, 'ai-tasks.json');
+const autoFile = path.join(dir, 'ai-tasks-auto.json');
+const stateFile = path.join(dir, 'watch-state.json');
 
 const COLORS = ['blue', 'indigo', 'cyan', 'green', 'yellow', 'amber', 'coral', 'red', 'violet', 'gray'];
 
@@ -60,7 +65,38 @@ const hhmm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 if (argv('list', false)) {
-  console.log(JSON.stringify(read(), null, 2));
+  const auto = (() => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(autoFile, 'utf8'));
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })();
+  console.log(JSON.stringify({ manual: read(), auto }, null, 2));
+  process.exit(0);
+}
+
+if (argv('backfill', false)) {
+  let state = { sessions: {} };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    if (parsed && typeof parsed === 'object' && parsed.sessions) state = parsed;
+  } catch {
+    /* no state yet: every Session is baselined at its end, so write a fresh file */
+  }
+  const rewound = Object.keys(state.sessions).length;
+  for (const entry of Object.values(state.sessions)) {
+    entry.offset = 0;
+    entry.lastSeq = 0;
+    entry.completed = {};
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  console.log(`rewound ${rewound} session(s); the host tailer will re-read them from the start`);
+  if (!rewound) {
+    console.log('note: no sessions tracked yet — start the host once, then run --backfill again');
+  }
   process.exit(0);
 }
 

@@ -1,47 +1,72 @@
 /**
  * Host half of the 日程 bundle.
  *
- * The calendar itself is drawn in the browser, but two things can only happen
+ * The calendar itself is drawn in the browser, but three things can only happen
  * here:
  *
- *   1. `GET /dsh-calendar/ai-tasks` — the page reads the AI task log this half
- *      owns. The log is a plain JSON file so the agent can append to it when it
- *      finishes a task (`log-task.mjs` does exactly that).
+ *   1. `GET /dsh-calendar/ai-tasks` — the page reads the AI task records this
+ *      half owns. Two plain JSON files feed it: the hand-written log
+ *      (`ai-tasks.json`, appended by `log-task.mjs`) and the automatic one
+ *      (`ai-tasks-auto.json`, appended by `auto-log.mjs`).
  *   2. `POST /dsh-calendar/start` — the page asks the Harness to hand a due AI
  *      task to the model as a real prompt. Delivery goes through the shipped
  *      `schedule` service: a one-shot reminder a couple of seconds out is
  *      appended to the target Session's inbox, which is what actually starts
  *      the work. Without that service the route answers `ok: false` and the
  *      page falls back to clipboard + a fresh session.
+ *   3. The tailer in `auto-log.mjs`, which watches Session logs for `todo/write`
+ *      events and records every item that reaches `completed`.
  *
- * The AI task log lives beside the rest of the harness data:
- * `$DSH_HOME/calendar-plugin/ai-tasks.json` (default `~/.dsh/...`).
+ * Everything lives beside the rest of the harness data:
+ * `$DSH_HOME/calendar-plugin/` (default `~/.dsh/...`).
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+import { startAutoLog } from './auto-log.mjs';
 
 export const inject = ['webServer'];
 
 const TASKS_PATH = '/dsh-calendar/ai-tasks';
 const START_PATH = '/dsh-calendar/start';
 
+function homeDir() {
+  return (process.env.DSH_HOME || '').trim() || path.join(os.homedir(), '.dsh');
+}
+
 export function dataDir() {
-  const home = (process.env.DSH_HOME || '').trim() || path.join(os.homedir(), '.dsh');
-  return path.join(home, 'calendar-plugin');
+  return path.join(homeDir(), 'calendar-plugin');
 }
 
 export function tasksFile() {
   return path.join(dataDir(), 'ai-tasks.json');
 }
 
-function readTasks() {
+export function autoTasksFile() {
+  return path.join(dataDir(), 'ai-tasks-auto.json');
+}
+
+export function watchStateFile() {
+  return path.join(dataDir(), 'watch-state.json');
+}
+
+export function sessionsDir() {
+  return path.join(homeDir(), 'sessions');
+}
+
+function readList(file) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(tasksFile(), 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     return Array.isArray(parsed) ? parsed.filter((t) => t && t.title) : [];
   } catch {
     return [];
   }
+}
+
+/** Hand-written records first, then the automatically captured ones. */
+function readTasks() {
+  return readList(tasksFile()).concat(readList(autoTasksFile()));
 }
 
 function sendJson(res, status, body) {
@@ -88,6 +113,21 @@ function scheduleService(ctx) {
 }
 
 export function apply(ctx) {
+  // Watch the Session logs for finished todo items and turn them into records.
+  ctx.effect(() => {
+    const stop = startAutoLog({
+      sessionsDir: sessionsDir(),
+      statePath: watchStateFile(),
+      outPath: autoTasksFile(),
+      onRecords: (records) => {
+        for (const record of records) {
+          ctx.logger?.info?.(`calendar: auto-logged "${record.title}"`);
+        }
+      },
+    });
+    return stop;
+  }, 'calendar: todo-completion tailer');
+
   ctx.effect(
     () =>
       ctx.webServer.register({
@@ -96,7 +136,11 @@ export function apply(ctx) {
         handler: (req, res) => {
           if (!isLoopback(req)) return sendJson(res, 403, { error: 'loopback only' });
           if (req.method !== 'GET') return sendJson(res, 405, { error: 'GET only' });
-          sendJson(res, 200, { tasks: readTasks(), file: tasksFile() });
+          sendJson(res, 200, {
+            tasks: readTasks(),
+            file: tasksFile(),
+            autoFile: autoTasksFile(),
+          });
         },
       }),
     `calendar: GET ${TASKS_PATH}`,

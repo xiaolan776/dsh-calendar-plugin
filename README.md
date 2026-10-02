@@ -21,7 +21,7 @@
 | 主题 | 宿主主题变量（`--dsw-alias-*`）+ 5 个固定中调色相，明/暗主题下都保持可读 |
 | 重叠 | 同一天时间重叠的事件自动并排分栏 |
 | **来源区分** | AI 事件：虚线左边 + 斜纹底 + `✦` 标记；已完成记录再加 `✓` 且淡化。工具栏可切「全部 / 我的 / AI」 |
-| **完成即入历** | 每完成一项任务往 AI 任务日志追加一条记录，日历自动显示（见下） |
+| **完成即入历** | 宿主尾随会话日志，**待办清单里完成的条目自动**变成日历上的 AI 事件（零散任务可用 `log-task.mjs` 补录） |
 | **AI 日程** | 用户可在编辑器里把任意日程勾成「AI 任务」，到点会弹窗问要不要开始执行 |
 
 ![编辑面板与 10 色实时预览](screenshots/editor-colors-preview.png)
@@ -32,16 +32,32 @@
 
 ### 1. 完成的任务自动进日程
 
-宿主半维护一份纯 JSON 日志：`$DSH_HOME/calendar-plugin/ai-tasks.json`（默认 `~/.dsh/...`）。
-AI（也就是我）每完成一项任务就追加一条记录：
+**默认自动**：宿主半在 `auto-log.mjs` 里尾随 Session 日志，任何一份待办清单里
+`status` 变成 `completed` 的条目，都会被记成一条 AI 事件（带完成时刻）。无需 AI 额外操作。
+
+- 信号来源：Session 日志里的 `todo/write` 事件（`$DSH_HOME/sessions/**/session.v4.jsonl.zstd`）
+- 只跟**根会话**（带 `parentSession` 的子代理会话会被跳过，否则日历会被子任务刷屏）
+- **不回放历史**：第一次看到某个会话时只做基线（记住已完成项、不生成记录），避免一装插件就灌进一堆旧任务
+- 每 4 秒扫一次，单轮最多记 12 条，超出部分留到下一轮；解码 2.2MB 日志约 77ms
+- 记录写在 `ai-tasks-auto.json`，**只由宿主写**，与手写的 `ai-tasks.json` 分开，不存在并发覆盖
+
+代价说清楚：**只有走待办清单的工作才会被自动捕获**。零散的单步任务（没建清单）仍需手动补录：
 
 ```powershell
-node log-task.mjs --title "修复事件块越界" --at 2026-10-02T16:50 --minutes 20 --color green `
-                  --prompt "content-box 导致右边溢出 14.5px；改 border-box + 1px 内缩"
+node log-task.mjs --title "上传插件到 GitHub 仓库" --at 2026-10-02T20:56 --minutes 20 --color green `
+                  --prompt "初始化 git 仓库、提交 17 个文件并推送"
 ```
 
-页面每 15 秒轮询 `GET /dsh-calendar/ai-tasks` 把它们画成 AI 事件（`status: "done"` → `✓` 淡化）。
-常用参数：`--list` 查看、`--remove <id>` 删除、`--status planned` 记成待执行（会参与到点提醒）。
+想把某个会话的**历史**待办完成项一次性补进日历（例如刚装上插件）：
+
+```powershell
+node log-task.mjs --backfill    # 把监听状态回退到会话开头，宿主会在随后几轮补齐
+```
+
+两条命令都可以用 `--list` 查看当前全部记录（手写 + 自动），`--remove <id>` 删除手写记录。
+
+页面每 15 秒轮询 `GET /dsh-calendar/ai-tasks`（返回两份文件的合并），把它们画成 AI 事件
+（`status: "done"` → `✓` 淡化）。
 
 ### 2. 用户自己加的 AI 日程
 
@@ -72,7 +88,8 @@ node log-task.mjs --title "修复事件块越界" --at 2026-10-02T16:50 --minute
 | `cordis.patch.yml` | 插入一行，把本包挂进插件树 |
 | `index.js` | 宿主半：`GET /dsh-calendar/ai-tasks`（读 AI 任务日志）与 `POST /dsh-calendar/start`（把任务交给 `schedule` 服务投递进会话）；只接受回环请求 |
 | `client.js` | 浏览器半：手写 `window.__ModuleLoader__.load({ id, factory })` 封套，React 从宿主模块表取。注册 4 个扩展点：侧边栏入口、日历页、全局提醒弹窗、会话 id 追踪 |
-| `log-task.mjs` | 命令行工具：把一项完成的任务追加进 AI 任务日志 |
+| `log-task.mjs` | 命令行工具：手动追加一条完成任务记录；`--backfill` 让自动监听重读历史 |
+| `auto-log.mjs` | 自动记录：尾随 Session 日志的 `todo/write` 事件，把完成的待办条目写成日历记录 |
 | `icon.svg` | 插件列表图标 |
 
 注册的两个扩展点：
@@ -138,7 +155,9 @@ git -C <clone 目录> pull
 | 视图偏好 | `localStorage`：`dsh.calendar.view.v1` | 浏览器 |
 | 提醒已处理 / 稍后提醒 | `localStorage`：`dsh.calendar.acked.v1` | 浏览器 |
 | 删除过的宿主记录 | `localStorage`：`dsh.calendar.hidden.v1` | 浏览器 |
-| **AI 任务记录（我完成的任务）** | `$DSH_HOME/calendar-plugin/ai-tasks.json` | **宿主文件，可直接编辑** |
+| **AI 任务记录（手动补录）** | `$DSH_HOME/calendar-plugin/ai-tasks.json` | **宿主文件，可直接编辑** |
+| **AI 任务记录（自动捕获）** | `$DSH_HOME/calendar-plugin/ai-tasks-auto.json` | **宿主写，勿手改** |
+| 监听进度（每会话的读取偏移与已完成项） | `$DSH_HOME/calendar-plugin/watch-state.json` | 宿主写；删掉即重新基线 |
 
 只在本机运行，不联网；两个宿主路由都只接受 127.0.0.1 / ::1 的请求，且仅 `webServer` 一个依赖。
 
