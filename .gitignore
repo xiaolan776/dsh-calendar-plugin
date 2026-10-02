@@ -1,0 +1,18 @@
+# dependencies (none today; kept so a future build step cannot leak them in)
+node_modules/
+
+# logs
+*.log
+
+# editor / OS noise
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# local scratch from the verification harness
+_verify-*.png
+_v4-*.png
+_v5-*.png
+_repro-*.png

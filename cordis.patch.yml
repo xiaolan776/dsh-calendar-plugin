@@ -1,0 +1,8 @@
+# 日程 (Calendar) bundle over the shipped Web composition.
+#
+# Inserts one row: the package's Host half (an empty apply) plus its Client half,
+# which registers the "日程" sidebar entry and the calendar page it opens.
+
+- insert:
+    - id: dsh-calendar-plugin
+      name: '@local/dsh-calendar-plugin'

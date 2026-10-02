@@ -1,0 +1,119 @@
+# 日程 — Harness 日历插件
+
+一个把日历带进 DeepSeek Harness Web UI 的插件：侧边栏「自动化任务」下面是「日程」，
+点开是一个完整的日历页面（月 / 周 / 日 / 列表四种视图、事件增删改、本机持久化）。
+
+![月视图](screenshots/month-light.png)
+
+![周视图](screenshots/week-light.png)
+
+## 功能
+
+| 能力 | 说明 |
+|---|---|
+| 视图 | 月、周、日、列表（Agenda，未来 60 天） |
+| 新建 | **双击**月视图格子、**双击**周/日视图时段，或点「新建日程」按钮（单击不触发，避免误操作） |
+| 编辑 / 删除 | **双击**任意事件（月视图色条、时间块、全天条、列表行均可）→ 右侧面板，可改可删 |
+| 字段 | 标题、日期、全天、开始/结束时间、颜色（**10 色**）、地点、备注、**是否 AI 任务** |
+| 实时预览 | 选颜色、改标题/时间/全天/来源时，**日历上立刻**画出未保存的虚线预览块；保存后才落盘 |
+| 导航 | ‹ 今天 ›、视图切换；周/日视图自动滚到当前时刻并画当前时间线 |
+| 持久化 | 我的日程存本机浏览器 `localStorage`（`dsh.calendar.events.v1`）；AI 任务记录存宿主文件 |
+| 主题 | 宿主主题变量（`--dsw-alias-*`）+ 5 个固定中调色相，明/暗主题下都保持可读 |
+| 重叠 | 同一天时间重叠的事件自动并排分栏 |
+| **来源区分** | AI 事件：虚线左边 + 斜纹底 + `✦` 标记；已完成记录再加 `✓` 且淡化。工具栏可切「全部 / 我的 / AI」 |
+| **完成即入历** | 每完成一项任务往 AI 任务日志追加一条记录，日历自动显示（见下） |
+| **AI 日程** | 用户可在编辑器里把任意日程勾成「AI 任务」，到点会弹窗问要不要开始执行 |
+
+![编辑面板与 10 色实时预览](screenshots/editor-colors-preview.png)
+
+![AI 任务到点提醒](screenshots/ai-reminder.png)
+
+## AI 任务通道
+
+### 1. 完成的任务自动进日程
+
+宿主半维护一份纯 JSON 日志：`$DSH_HOME/calendar-plugin/ai-tasks.json`（默认 `~/.dsh/...`）。
+AI（也就是我）每完成一项任务就追加一条记录：
+
+```powershell
+node log-task.mjs --title "修复事件块越界" --at 2026-10-02T16:50 --minutes 20 --color green `
+                  --prompt "content-box 导致右边溢出 14.5px；改 border-box + 1px 内缩"
+```
+
+页面每 15 秒轮询 `GET /dsh-calendar/ai-tasks` 把它们画成 AI 事件（`status: "done"` → `✓` 淡化）。
+常用参数：`--list` 查看、`--remove <id>` 删除、`--status planned` 记成待执行（会参与到点提醒）。
+
+### 2. 用户自己加的 AI 日程
+
+编辑器里勾「AI 任务（到点提示我开始执行）」即可。这类日程存在浏览器里，和我的记录一起显示，
+但来源标记相同、行为一致。
+
+### 3. 到点弹窗
+
+对**今天已到开始时间**（45 分钟窗口内）的待执行 AI 日程，页面会弹出提示卡片（挂在
+`shell.overlay`，所以不管你在哪个页面都会出现），三个按钮：
+
+| 按钮 | 行为 |
+|---|---|
+| **开始执行** | `POST /dsh-calendar/start` → 宿主用内置 `schedule` 服务把任务作为一条提示投递进你当前所在会话（`after_seconds: 2`），**AI 随即开始干活**。服务不可用时自动兜底：任务复制到剪贴板 + 打开一个新会话 |
+| 10 分钟后再提醒 | 本次稍后，10 分钟后重新弹 |
+| 今天跳过 | 记为已处理，今天不再弹（下次同一条日程仍会提醒） |
+
+「今天跳过」的状态存在 `localStorage`（`dsh.calendar.acked.v1`），删除宿主记录的状态存在
+`dsh.calendar.hidden.v1`。
+
+## 结构
+
+这是一个 Harness **bundle**（宿主半 + 浏览器半），无需构建步骤：
+
+| 文件 | 作用 |
+|---|---|
+| `package.json` | `dsh.bundle.patch` 指向 cordis 补丁；`dsh.client` 声明浏览器半（`platform: web`、`inject` 依赖） |
+| `cordis.patch.yml` | 插入一行，把本包挂进插件树 |
+| `index.js` | 宿主半：`GET /dsh-calendar/ai-tasks`（读 AI 任务日志）与 `POST /dsh-calendar/start`（把任务交给 `schedule` 服务投递进会话）；只接受回环请求 |
+| `client.js` | 浏览器半：手写 `window.__ModuleLoader__.load({ id, factory })` 封套，React 从宿主模块表取。注册 4 个扩展点：侧边栏入口、日历页、全局提醒弹窗、会话 id 追踪 |
+| `log-task.mjs` | 命令行工具：把一项完成的任务追加进 AI 任务日志 |
+| `icon.svg` | 插件列表图标 |
+
+注册的两个扩展点：
+
+- `sidebar.panellist` — 侧边栏图标入口，`id: calendar`、`order: 11`（`插件` 是 0，`自动化任务` 是 10，所以它紧随其后）、`label: 日程`
+- `main` — 页面本体，`key: calendar`（与侧边栏 id 相同，点击即打开）
+
+## 安装 / 更新 / 卸载
+
+```powershell
+$dsh = 'C:\Users\Xiaolan\AppData\Local\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd'
+
+# 安装（装进 desktop profile）
+& $dsh plugin --profile desktop add "file:E:/chronos-master/dsh-calendar-plugin"
+
+# 改了源码后必须重装：profile 里存的是拷贝，不是链接
+& $dsh plugin --profile desktop remove "@local/dsh-calendar-plugin"
+& $dsh plugin --profile desktop add "file:E:/chronos-master/dsh-calendar-plugin"
+
+# 卸载
+& $dsh plugin --profile desktop remove "@local/dsh-calendar-plugin"
+```
+
+装完需要让 Host 重新加载插件树。**宿主半（两个 HTTP 路由）只有重启 DeepSeek Harness 应用才会生效**；
+只刷新页面只会重新加载浏览器半。
+
+## 数据
+
+| 数据 | 位置 | 归属 |
+|---|---|---|
+| 我的日程 / 用户建的 AI 日程 | 浏览器 `localStorage`：`dsh.calendar.events.v1` | 浏览器 |
+| 视图偏好 | `localStorage`：`dsh.calendar.view.v1` | 浏览器 |
+| 提醒已处理 / 稍后提醒 | `localStorage`：`dsh.calendar.acked.v1` | 浏览器 |
+| 删除过的宿主记录 | `localStorage`：`dsh.calendar.hidden.v1` | 浏览器 |
+| **AI 任务记录（我完成的任务）** | `$DSH_HOME/calendar-plugin/ai-tasks.json` | **宿主文件，可直接编辑** |
+
+只在本机运行，不联网；两个宿主路由都只接受 127.0.0.1 / ::1 的请求，且仅 `webServer` 一个依赖。
+
+## 已知边界
+
+- 无重复日程（RRULE）、无系统级通知、无导入导出、无多日历订阅——本版只做本机单日历 + AI 通道。
+- 时间按本地墙上时间处理，不含时区换算。
+- AI 记录只有「追加」没有「回写」：用户在页面上删除/修改宿主记录仅作用于本机显示，不回改 JSON 文件。
+- 「开始执行」依赖内置 `schedule` 服务（随「自动化任务」一起加载）。若该 bundle 被禁用，会自动走剪贴板兜底。
