@@ -376,6 +376,27 @@ window.__ModuleLoader__.load({
 .dshcal-arow .n{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dshcal-arow .l{font-size:12px;color:var(--dsw-alias-label-tertiary);flex:none}
 
+/* agenda: a day strip picks the day the list starts from */
+.dshcal-agendawrap{flex:1;min-height:0;display:flex;flex-direction:column}
+.dshcal-agendahead{display:flex;align-items:center;gap:10px;flex:none;padding:12px 20px 0}
+.dshcal-daystrip{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0;padding-bottom:8px}
+.dshcal-daychip{flex:none;display:flex;flex-direction:column;align-items:center;gap:1px;min-width:54px;
+  padding:6px 8px;font:inherit;font-size:11px;line-height:14px;color:var(--dsw-alias-label-secondary);
+  background:transparent;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);
+  cursor:pointer;transition:background .15s,border-color .15s}
+.dshcal-daychip:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dshcal-daychip .d{font-size:15px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary)}
+.dshcal-daychip .c{font-size:10px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.dshcal-daychip .c.has{color:var(--dsw-alias-brand-primary)}
+.dshcal-daychip.on{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}
+.dshcal-agroup.on{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 7%,transparent);
+  border-radius:var(--dsw-radius-md);padding-left:12px;padding-right:12px;
+  border-bottom-color:transparent;margin-bottom:4px}
+.dshcal-seltag{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;font-size:10px;
+  color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 22%,transparent)}
+.dshcal-dayhint{display:flex;align-items:center;gap:8px;padding:4px 0 8px;font-size:12px;
+  color:var(--dsw-alias-label-tertiary)}
+
 /* empty state */
 .dshcal-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
   height:100%;color:var(--dsw-alias-label-tertiary);font-size:13px}
@@ -803,67 +824,149 @@ window.__ModuleLoader__.load({
      * Agenda
      * ------------------------------------------------------------------ */
 
-    function AgendaView({ events, onOpen }) {
+    /**
+     * Agenda: a day strip chooses the day the list starts from, and the list
+     * covers the 60 days after it. The selected day is called out even when it
+     * is empty, so "what is on that day" always has an answer.
+     */
+    function AgendaView({ anchor, events, onOpen, onPickDay }) {
+      const stripRef = useRef(null);
+
+      const selectedDay = useMemo(
+        () => new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate()),
+        [anchor],
+      );
+
+      // Two weeks around the selected day, week-aligned so picking a day inside
+      // the visible week does not shuffle the strip.
+      const strip = useMemo(
+        () => Array.from({ length: 14 }, (_, i) => addDays(startOfWeek(selectedDay), i)),
+        [selectedDay],
+      );
+
       const groups = useMemo(() => {
-        const start = new Date();
-        start.setHours(0, 0, 0, 0);
-        const end = addDays(start, 60);
+        const end = addDays(selectedDay, 60);
         const byDate = new Map();
         sortEvents(events).forEach((ev) => {
           const d = parseYmd(ev.date);
-          if (d < start || d > end) return;
+          if (d < selectedDay || d > end) return;
           if (!byDate.has(ev.date)) byDate.set(ev.date, []);
           byDate.get(ev.date).push(ev);
         });
         return Array.from(byDate.entries());
-      }, [events]);
+      }, [events, selectedDay]);
 
-      if (!groups.length) {
-        return h(
-          'div',
-          { className: 'dshcal-empty' },
-          h(Icon, { name: 'calendar', size: 28 }),
-          h('div', null, '未来 60 天没有日程'),
-          h('div', { className: 'dshcal-hint' }, '点右上角「新建日程」开始'),
-        );
-      }
+      const selectedKey = ymd(selectedDay);
+      const selectedCount = eventsOn(events, selectedKey).length;
+
+      // Keep the chosen day visible when the anchor moves (‹ ›, date input, 今天).
+      useEffect(() => {
+        const strip = stripRef.current;
+        const chip = strip && strip.querySelector('[data-on="1"]');
+        if (chip && chip.scrollIntoView) chip.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+      }, [selectedKey]);
 
       return h(
         'div',
-        { className: 'dshcal-agenda' },
-        groups.map(([dateStr, list]) => {
-          const d = parseYmd(dateStr);
-          return h(
+        { className: 'dshcal-agendawrap' },
+        h(
+          'div',
+          { className: 'dshcal-agendahead' },
+          h(
             'div',
-            { className: 'dshcal-agroup', key: dateStr },
-            h(
-              'div',
-              { className: 'dshcal-adate' },
-              h('span', { className: 'big' }, `${d.getMonth() + 1}/${d.getDate()}`),
-              `周${DOW[(d.getDay() + 6) % 7]}${isToday(d) ? ' · 今天' : ''} · ${list.length} 项`,
-            ),
-            h(
-              'div',
-              { className: 'dshcal-arows' },
-              list.map((ev) =>
-                h(
+            { className: 'dshcal-daystrip', ref: stripRef },
+            strip.map((d) => {
+              const key = ymd(d);
+              const count = eventsOn(events, key).length;
+              const on = key === selectedKey;
+              return h(
+                'button',
+                {
+                  key,
+                  type: 'button',
+                  'data-on': on ? '1' : undefined,
+                  className: `dshcal-daychip${on ? ' on' : ''}`,
+                  onClick: () => onPickDay(d),
+                  title: `${key} · ${count} 项`,
+                },
+                h('span', null, isToday(d) ? '今天' : `周${DOW[(d.getDay() + 6) % 7]}`),
+                h('span', { className: 'd' }, d.getDate()),
+                h('span', { className: `c${count ? ' has' : ''}` }, count ? `${count} 项` : '—'),
+              );
+            }),
+          ),
+          h('input', {
+            className: 'dshcal-input',
+            style: { width: '148px', flex: 'none' },
+            type: 'date',
+            value: selectedKey,
+            title: '跳到指定日期',
+            onInput: (e) => {
+              if (e.target.value) onPickDay(parseYmd(e.target.value));
+            },
+          }),
+        ),
+        h(
+          'div',
+          { className: 'dshcal-agenda' },
+          selectedCount === 0
+            ? h(
+                'div',
+                { className: 'dshcal-dayhint' },
+                h(Icon, { name: 'calendar', size: 14 }),
+                `${selectedKey} 这天没有日程`,
+                groups.length
+                  ? ` · 之后最近的日程在 ${groups[0][0]}`
+                  : ' · 之后 60 天内也没有',
+              )
+            : null,
+          groups.length
+            ? groups.map(([dateStr, list]) => {
+                const d = parseYmd(dateStr);
+                const on = dateStr === selectedKey;
+                return h(
                   'div',
-                  {
-                    key: ev.id,
-                    className: eventClass('dshcal-arow', ev),
-                    style: { '--dshcal-color': colorOf(ev.color), '--dshcal-fill': fillOf(ev.color) },
-                    onDoubleClick: () => onOpen(ev),
-                    title: '双击编辑',
-                  },
-                  EventMarker(ev),
-                  h('span', { className: 'r' }, fmtRange(ev)),
-                  h('span', { className: 'n' }, ev.title),
-                  ev.location ? h('span', { className: 'l' }, `· ${ev.location}`) : null,
-                ),
+                  { className: `dshcal-agroup${on ? ' on' : ''}`, key: dateStr },
+                  h(
+                    'div',
+                    { className: 'dshcal-adate' },
+                    h('span', { className: 'big' }, `${d.getMonth() + 1}/${d.getDate()}`),
+                    `周${DOW[(d.getDay() + 6) % 7]}${isToday(d) ? ' · 今天' : ''} · ${list.length} 项`,
+                    on ? h('span', { className: 'dshcal-seltag' }, '选中') : null,
+                  ),
+                  h(
+                    'div',
+                    { className: 'dshcal-arows' },
+                    list.map((ev) =>
+                      h(
+                        'div',
+                        {
+                          key: ev.id,
+                          className: eventClass('dshcal-arow', ev),
+                          style: {
+                            '--dshcal-color': colorOf(ev.color),
+                            '--dshcal-fill': fillOf(ev.color),
+                          },
+                          onDoubleClick: () => onOpen(ev),
+                          title: '双击编辑',
+                        },
+                        EventMarker(ev),
+                        h('span', { className: 'r' }, fmtRange(ev)),
+                        h('span', { className: 'n' }, ev.title),
+                        ev.location ? h('span', { className: 'l' }, `· ${ev.location}`) : null,
+                      ),
+                    ),
+                  ),
+                );
+              })
+            : h(
+                'div',
+                { className: 'dshcal-empty', style: { height: 'auto', paddingTop: '32px' } },
+                h(Icon, { name: 'calendar', size: 28 }),
+                h('div', null, `${selectedKey} 起 60 天内没有日程`),
+                h('div', { className: 'dshcal-hint' }, '点右上角「新建日程」开始'),
               ),
-            ),
-          );
-        }),
+        ),
       );
     }
 
@@ -1341,7 +1444,14 @@ window.__ModuleLoader__.load({
                 showAllDay: true,
               })
             : null,
-          view === 'agenda' ? h(AgendaView, { events: visible, onOpen: openEdit }) : null,
+          view === 'agenda'
+            ? h(AgendaView, {
+                anchor,
+                events: visible,
+                onOpen: openEdit,
+                onPickDay: (d) => setAnchor(d),
+              })
+            : null,
           draft
             ? h(
                 'div',
